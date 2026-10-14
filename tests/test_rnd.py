@@ -1,0 +1,102 @@
+"""Every test checks against a known answer. Run: python -m pytest  (or python tests/test_rnd.py)"""
+import os
+import sys
+
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from rnd.core import analyze, black, implied_vol, lognormal_pdf, parity_forward
+from rnd.data import HESTON, heston_call, heston_cf, heston_pdf, synthetic_chain
+
+
+def tv(K, q, truth):
+    """Total variation distance between two densities on a uniform grid (0 = identical, 1 = disjoint)."""
+    return 0.5 * np.abs(q - truth).sum() * (K[1] - K[0])
+
+
+def test_implied_vol_round_trip():
+    # Out-of-the-money options, as the engine uses (deep ITM time value can sit below float precision).
+    K = np.linspace(50, 200, 61)
+    call = K >= 100
+    for vol in (0.05, 0.2, 0.8):
+        price = black(100, K, 0.75, vol, call)
+        iv = implied_vol(price, 100, K, 0.75, call)
+        quotable = price > 1e-6  # far below any real tick
+        assert np.isfinite(iv[quotable]).all()
+        assert np.abs(iv[quotable] - vol).max() < 1e-8
+
+
+def test_implied_vol_rejects_arbitrage_prices():
+    assert np.isnan(implied_vol(5.0, 100, 90, 1.0, True))     # below intrinsic 10
+    assert np.isnan(implied_vol(101.0, 100, 90, 1.0, True))   # above forward
+
+
+def test_heston_reference_implementation():
+    T = 0.5
+    assert abs(heston_cf(-1j, T, **HESTON) - 1) < 1e-12               # martingale
+    flat = dict(v0=0.04, kappa=1.0, theta=0.04, xi=1e-4, rho=0.0)     # vol of vol -> 0
+    K = np.array([80.0, 100.0, 120.0])
+    assert np.abs(heston_call(100, K, T, flat) - black(100, K, T, 0.2)).max() < 1e-6
+    Kc = np.linspace(60, 140, 401)
+    C = heston_call(100, Kc, T)
+    d2 = (C[:-2] - 2 * C[1:-1] + C[2:]) / (Kc[1] - Kc[0]) ** 2       # B-L identity on exact prices
+    assert np.abs(d2 - heston_pdf(Kc[1:-1], 100, T)).max() < 1e-5
+
+
+def test_parity_forward():
+    F, DF, T = 100.0, np.exp(-0.04 * 0.5), 0.5
+    K = np.arange(60.0, 141.0)
+    C = DF * heston_call(F, K, T)
+    Fh, DFh = parity_forward(K, C, C - DF * (F - K))
+    assert abs(Fh - F) < 1e-8 and abs(DFh - DF) < 1e-10
+    chain, T, DF = synthetic_chain()
+    Fh, DFh = parity_forward(chain["strike"].to_numpy(), chain["call_mid"].to_numpy(), chain["put_mid"].to_numpy())
+    assert abs(Fh / 100 - 1) < 1e-3 and abs(DFh / DF - 1) < 1e-3
+
+
+def test_flat_vol_recovers_lognormal():
+    F, T, DF, vol = 100.0, 0.5, 0.98, 0.2
+    K = np.arange(50.0, 161.0)
+    C = DF * black(F, K, T, vol)
+    r = analyze(pd.DataFrame({"strike": K, "call_mid": C, "put_mid": C - DF * (F - K)}), T)
+    Kq, q = r["density"]
+    assert r["fit_rmse"] < 1e-4
+    assert tv(Kq, q, lognormal_pdf(Kq, F, vol, T)) < 0.005
+
+
+def test_heston_density_recovered_from_noisy_quotes():
+    for seed in range(5):
+        chain, T, _ = synthetic_chain(seed=seed)
+        r = analyze(chain, T)
+        Kq, q = r["density"]
+        truth = heston_pdf(Kq, 100.0, T)
+        s = r["stats"]
+        assert tv(Kq, q, truth) < 0.03, seed
+        assert abs(s["mass"] - 1) < 0.005 and abs(s["mean"] / 100 - 1) < 0.001
+        assert s["min_q"] >= 0                                          # no negative probabilities
+        p_true = truth[Kq < r["crash_level"]].sum() * (Kq[1] - Kq[0])
+        assert abs(r["p_crash"] / p_true - 1) < 0.15, seed
+        assert r["p_crash"] > 1.5 * r["p_crash_lognormal"]             # fat left tail detected
+
+
+def test_robust_to_bad_wing_quotes():
+    chain, T, _ = synthetic_chain()
+    put_wing = chain.index[chain["put_mid"].notna()][:15]
+    call_wing = chain.index[chain["call_mid"].notna()][-15:]
+    chain.loc[put_wing[::5], "put_mid"] *= 1.5    # 3 stale quotes per wing, off by 50%
+    chain.loc[call_wing[::5], "call_mid"] *= 0.5
+    Kq, q = analyze(chain, T)["density"]
+    assert tv(Kq, q, heston_pdf(Kq, 100.0, T)) < 0.03
+
+
+def test_naive_breeden_litzenberger_fails_on_noise():
+    chain, T, _ = synthetic_chain()
+    assert (analyze(chain, T)["naive"][1] < 0).mean() > 0.10
+
+
+if __name__ == "__main__":
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print("ok  ", name)
