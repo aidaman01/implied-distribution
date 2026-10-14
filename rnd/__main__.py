@@ -5,9 +5,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from .core import analyze, svi
-from .data import heston_pdf, load_chain, synthetic_chain
+from .data import heston_pdf, load_cboe_csv, load_chain, synthetic_chain
 
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 BLUE, ORANGE, GRAY = "#2a78d6", "#eb6834", "#8a8984"
@@ -67,10 +68,19 @@ def main():
     ap.add_argument("ticker", nargs="?", default="^SPX")
     ap.add_argument("--expiry", help="YYYY-MM-DD; default first expiry >= 30 days out")
     ap.add_argument("--demo", action="store_true", help="offline: noisy Heston quotes with known truth")
+    ap.add_argument("--csv", help="offline: Cboe end-of-day quote file (needs --expiry), e.g. tests/data/spxw_20190626.csv")
     ap.add_argument("--out", default="rnd.png")
     a = ap.parse_args()
 
-    if a.demo:
+    if a.csv:
+        if not a.expiry:
+            ap.error("--csv needs --expiry")
+        chain, T = load_cboe_csv(a.csv, a.expiry)
+        r = analyze(chain, T)
+        quoted = pd.read_csv(a.csv, nrows=1)["quote_date"].iloc[0]
+        title, truth = f"SPX options expiring {a.expiry}, real quotes {quoted} 15:45 New York", None
+        report(r, title)
+    elif a.demo:
         chain, T, _ = synthetic_chain()
         r = analyze(chain, T)
         title = "Demo: noisy Heston quotes (true density known)"

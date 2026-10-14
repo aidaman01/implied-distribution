@@ -7,7 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from rnd.core import analyze, black, implied_vol, lognormal_pdf, parity_forward
-from rnd.data import HESTON, heston_call, heston_cf, heston_pdf, synthetic_chain
+from rnd.data import HESTON, heston_call, heston_cf, heston_pdf, load_cboe_csv, synthetic_chain
 
 
 def tv(K, q, truth):
@@ -88,6 +88,30 @@ def test_robust_to_bad_wing_quotes():
     chain.loc[call_wing[::5], "call_mid"] *= 0.5
     Kq, q = analyze(chain, T)["density"]
     assert tv(Kq, q, heston_pdf(Kq, 100.0, T)) < 0.03
+
+
+def test_real_spx_quotes_all_expiries():
+    """Real Cboe SPXW snapshot, 2019-06-26 15:45 (tests/data). No true density exists for real data,
+    so check what must hold: probabilities, forward, rates, calendar no-arbitrage, equity skew."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "spxw_20190626.csv")
+    spot = (2917.80 + 2918.42) / 2  # SPX bid/ask in the same file
+    atm_var = []
+    for e in sorted(pd.read_csv(path)["expiration"].unique()):
+        chain, T = load_cboe_csv(path, e)
+        if T * 365.25 < 7:
+            continue
+        r = analyze(chain, T)
+        Kq, q = r["density"]
+        s = r["stats"]
+        assert abs(s["mass"] - 1) < 0.005, e                            # probabilities sum to 1
+        assert -q[q < 0].sum() * (Kq[1] - Kq[0]) < 1e-5, e              # no material negative mass
+        assert abs(s["mean"] / r["F"] - 1) < 0.003, e                   # martingale: mean = forward
+        assert abs(r["F"] / spot - 1) < 0.005, e                        # forward close to spot
+        assert 0.015 < -np.log(r["DF"]) / T < 0.035, e                  # mid-2019 rates (Fed funds ~2.4%)
+        assert r["fit_rmse"] < 0.01, e                                  # SVI within 1 vol pt
+        assert s["skew"] < 0 and r["p_crash"] > 1.5 * r["p_crash_lognormal"], e
+        atm_var.append(r["atm_vol"] ** 2 * T)
+    assert len(atm_var) == 27 and np.all(np.diff(atm_var) > 0)        # calendar no-arbitrage
 
 
 def test_naive_breeden_litzenberger_fails_on_noise():

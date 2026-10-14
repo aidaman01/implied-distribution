@@ -41,6 +41,23 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30):
     return chain, T, expiry
 
 
+def load_cboe_csv(path, expiry):
+    """Cboe end-of-day file (columns quote_date, expiration, strike, option_type, bid_1545,
+    ask_1545, ...), one row per strike and C/P. Quotes are a 15:45 New York snapshot.
+    Returns (chain, T)."""
+    d = pd.read_csv(path, encoding="utf-8-sig")
+    d = d[d["expiration"] == expiry].rename(columns={"bid_1545": "bid", "ask_1545": "ask"})
+    if d.empty:
+        raise ValueError(f"no rows for expiry {expiry}; available: {sorted(pd.read_csv(path)['expiration'].unique())}")
+    d["mid"] = _mid(d)[0]
+    wide = d.pivot(index="strike", columns="option_type", values="mid")
+    chain = pd.DataFrame({"strike": wide.index.to_numpy(float), "call_mid": wide["C"].to_numpy(),
+                          "put_mid": wide["P"].to_numpy()})
+    quote = pd.Timestamp(d["quote_date"].iloc[0] + " 15:45", tz="America/New_York")
+    close = pd.Timestamp(expiry + " 16:00", tz="America/New_York")
+    return chain, (close - quote).total_seconds() / (365.25 * 86400)
+
+
 # Ground truth: Heston stochastic volatility, equity-index-like (negative spot/vol correlation).
 HESTON = dict(v0=0.04, kappa=1.5, theta=0.05, xi=0.6, rho=-0.7)
 

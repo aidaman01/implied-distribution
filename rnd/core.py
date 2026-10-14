@@ -48,14 +48,37 @@ def svi(k, a, b, rho, m, s):
     return a + b * (rho * (k - m) + np.sqrt((k - m) ** 2 + s ** 2))
 
 
+def durrleman_g(k, a, b, rho, m, s):
+    """Butterfly no-arbitrage condition: density >= 0 everywhere iff g(k) >= 0 (Gatheral-Jacquier)."""
+    r = np.sqrt((k - m) ** 2 + s ** 2)
+    w = svi(k, a, b, rho, m, s)
+    w1 = b * (rho + (k - m) / r)
+    w2 = b * s ** 2 / r ** 3
+    return (1 - k * w1 / (2 * w)) ** 2 - w1 ** 2 / 4 * (1 / w + 0.25) + w2 / 2
+
+
 def fit_svi(k, iv, T):
-    """Robust least squares in implied-vol space, multi-start. Returns (a, b, rho, m, s)."""
+    """Robust least squares in implied-vol space, multi-start, arbitrage-free. Returns (a, b, rho, m, s).
+
+    Two guards, both needed on real SPX data (unguarded: wing slope 3.9, probability mass 1.35):
+    - b = 2u / (1 + |rho|), u in (0, 1]: wing slopes b(1 +- rho) <= 2, Roger Lee's moment bound.
+    - a penalty on Durrleman's g(k) < 0 over the whole density grid: no negative probabilities,
+      including in the extrapolated wings where there are no quotes to pin the fit."""
     w = iv ** 2 * T
     lb = [-w.max(), 1e-6, -0.999, k.min() - 0.5, 1e-4]
-    ub = [w.max(), 2.0, 0.999, k.max() + 0.5, 2.0]
+    ub = [w.max(), 1.0, 0.999, k.max() + 0.5, 2.0]
+    sd0 = np.sqrt(np.interp(0.0, k, w))  # rough ATM total std dev
+    k_pen = np.linspace(min(k.min(), -12 * sd0), max(k.max(), 12 * sd0), 300)
 
-    def resid(p):
-        return np.sqrt(np.maximum(svi(k, *p), 1e-12) / T) - iv
+    def to_raw(x):
+        a, u, rho, m, s = x
+        return a, 2 * u / (1 + abs(rho)), rho, m, s
+
+    def resid(x):
+        p = to_raw(x)
+        fit = np.sqrt(np.maximum(svi(k, *p), 1e-12) / T) - iv
+        pen = np.minimum(durrleman_g(k_pen, *p), 0) if svi(k_pen, *p).min() > 0 else np.full(k_pen.size, -1.0)
+        return np.concatenate([fit, pen])
 
     best = None
     for rho0 in (-0.7, 0.0):
@@ -66,7 +89,7 @@ def fit_svi(k, iv, T):
                 r = least_squares(resid, x0, bounds=(lb, ub), loss="soft_l1", f_scale=0.005)
                 if best is None or r.cost < best.cost:
                     best = r
-    return tuple(best.x)
+    return to_raw(best.x)
 
 
 def density(F, T, params, n=4001, width=8.0):
