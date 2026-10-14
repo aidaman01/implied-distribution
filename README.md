@@ -27,7 +27,7 @@ All of it is in [`rnd/core.py`](rnd/core.py), about 170 lines.
 
 ## Validation
 
-`python tests/test_rnd.py` (or `python -m pytest`), 11 tests, about 20 seconds of computation.
+`python tests/test_rnd.py` (or `python -m pytest`), 12 tests, about 30 seconds of computation.
 
 **Known truth.** Noisy, tick-rounded quotes generated from a Heston stochastic-volatility model, whose density is exact by Fourier inversion.
 
@@ -65,6 +65,8 @@ python -m rnd --demo                                                    # known 
 python -m rnd --csv tests/data/spxw_20190626.csv --expiry 2019-07-26    # real quotes, offline
 python -m rnd ^SPX                                                      # live, first expiry ≥ 30 days
 python -m rnd ^SPX --expiry 2026-12-18
+python -m rnd --csv tests/data/spxw_20190626.csv --surface                # implied vol surface -> surface.png
+python -m rnd ^SPX --surface --out surface_live.png
 ```
 
 Live data comes from Yahoo Finance (free, via yfinance). Run it during US market hours: 9:30–16:00 New York, which is 18:30–01:00 Almaty, or 19:30–02:00 after US clocks change on Nov 1. Outside those hours Yahoo returns empty bid/ask, and the loader stops with a clear message rather than use stale prices. `--csv` reads any file in Cboe's end-of-day format.
@@ -87,6 +89,18 @@ The market puts **4.7% on a 2-standard-deviation drop** (below 7,220) by 16 Nove
 | 2027-04-16 | 184 | 7,908.6 | 15.0% | 0.9990 | 9 bp | 0.32 | 4.9% | 26-wk 4.35% | 5.5% / 2.6% |
 
 T-bill: U.S. Treasury daily bill rates, coupon equivalent. Negative probability mass is below 3e-6 on every expiry, and ATM total variance rises with maturity (0.00139, 0.00319, 0.00477, 0.01134), so there is no calendar arbitrage. The implied rate comes from put-call parity alone and sits 0.5–0.65 points above T-bills at 2–6 months (continuously compounded vs coupon-equivalent; converting shifts it under 0.05). This is consistent with SPX box-spread rates usually running above Treasury yields, but only one day was measured here.
+
+## Implied volatility surface
+
+`--surface` fits SVI to every expiry in order of maturity. A calendar penalty, built like the Durrleman one, stops total variance from falling below the previous expiry on the strikes both quote. Fitted independently, the 2019 surface had total variance falling by up to 2.9e-3 (at ln(K/F) = −0.89, September 2019 expiries), even though the bid/ask quotes contain no calendar arbitrage at any strike. With the penalty there is no fall anywhere, and SVI fit error rises by at most 0.11 vol pts. The chart shows expiries up to 1 year on the strike range quoted by all of them, with total variance linear in T between expiries.
+
+![SPX implied vol surface, 2019](surface.png)
+
+*2019 snapshot: 27 expiries fitted (3 under 7 days skipped); 26 up to 1 year shown over ln(K/F) −0.175 to 0.084.*
+
+![SPX implied vol surface, live](surface_live.png)
+
+*Live ^SPX, 14 October 2026, 11:43 New York: 46 expiries fitted (5 under 7 days skipped, plus 2030 and 2031, which failed the mass and mean checks); 40 up to 1 year shown over ln(K/F) −0.325 to 0.066.*
 
 ## Limits
 

@@ -61,13 +61,15 @@ def durrleman_g(k, a, b, rho, m, s):
     return (1 - k * w1 / (2 * w)) ** 2 - w1 ** 2 / 4 * (1 / w + 0.25) + w2 / 2
 
 
-def fit_svi(k, iv, T):
+def fit_svi(k, iv, T, prev=None):
     """Robust least squares in implied-vol space, multi-start, arbitrage-free. Returns (a, b, rho, m, s).
 
     Two guards, both needed on real SPX data (unguarded: wing slope 3.9, probability mass 1.35):
     - b = 2u / (1 + |rho|), u in (0, 1]: wing slopes b(1 +- rho) <= 2, Roger Lee's moment bound.
     - a penalty on Durrleman's g(k) < 0 over the whole density grid: no negative probabilities,
-      including in the extrapolated wings where there are no quotes to pin the fit."""
+      including in the extrapolated wings where there are no quotes to pin the fit.
+    prev: (k_min, k_max, params) of the previous, shorter expiry. Adds a calendar penalty where total
+    variance falls below it on the strikes both quote (independent fits on 2019 data fell by up to 2.9e-3)."""
     w = iv ** 2 * T
     lb = [-w.max(), 1e-6, -0.999, k.min() - 0.5, 1e-4]
     ub = [w.max(), 1.0, 0.999, k.max() + 0.5, 2.0]
@@ -78,11 +80,18 @@ def fit_svi(k, iv, T):
         a, u, rho, m, s = x
         return a, 2 * u / (1 + abs(rho)), rho, m, s
 
+    if prev is not None:
+        k_cal = np.linspace(max(k.min(), prev[0]), min(k.max(), prev[1]), 100)
+        vol_floor = np.sqrt(svi(k_cal, *prev[2]) / T) + 1e-4  # 0.01 vol pt margin: the soft penalty stops just short
+
     def resid(x):
         p = to_raw(x)
         fit = np.sqrt(np.maximum(svi(k, *p), 1e-12) / T) - iv
         pen = np.minimum(durrleman_g(k_pen, *p), 0) if svi(k_pen, *p).min() > 0 else np.full(k_pen.size, -1.0)
-        return np.concatenate([fit, pen])
+        if prev is None:
+            return np.concatenate([fit, pen])
+        cal = 100 * np.minimum(np.sqrt(np.maximum(svi(k_cal, *p), 0) / T) - vol_floor, 0)
+        return np.concatenate([fit, pen, cal])
 
     best = None
     for rho0 in (-0.7, 0.0):
@@ -94,6 +103,23 @@ def fit_svi(k, iv, T):
                 if best is None or r.cost < best.cost:
                     best = r
     return to_raw(best.x)
+
+
+def calendar_violation(slices):
+    """Calendar no-arbitrage on the whole surface: total variance w(k, T) must not fall as T grows, at
+    any k quoted in both of two adjacent expiries (so also on the range quoted in all of them).
+    slices: (T, k_min, k_max, params, ...) sorted by T. Returns the worst (drop, k, T_short, T_long),
+    drop = w_short - w_long; drop <= 0 means no violation anywhere."""
+    worst = (-np.inf, np.nan, np.nan, np.nan)
+    for (T1, lo1, hi1, p1, *_), (T2, lo2, hi2, p2, *_) in zip(slices, slices[1:]):
+        lo, hi = max(lo1, lo2), min(hi1, hi2)
+        if lo >= hi:
+            continue
+        k = np.linspace(lo, hi, 201)
+        drop = svi(k, *p1) - svi(k, *p2)
+        if drop.max() > worst[0]:
+            worst = (drop.max(), k[drop.argmax()], T1, T2)
+    return worst
 
 
 def density(F, T, params, n=4001, width=WIDTH):
@@ -139,8 +165,9 @@ def moments(K, q, F):
     }
 
 
-def analyze(chain, T):
-    """chain: DataFrame with columns strike, call_mid, put_mid (discounted market mids)."""
+def analyze(chain, T, prev=None):
+    """chain: DataFrame with columns strike, call_mid, put_mid (discounted market mids).
+    prev: previous expiry's (k_min, k_max, params) for a calendar-arbitrage-free surface fit."""
     chain = chain.sort_values("strike")
     K = chain["strike"].to_numpy(float)
     cm, pm = chain["call_mid"].to_numpy(float), chain["put_mid"].to_numpy(float)
@@ -153,7 +180,7 @@ def analyze(chain, T):
     ok = np.isfinite(iv)
     k, iv = np.log(K[ok] / F), iv[ok]
 
-    params = fit_svi(k, iv, T)
+    params = fit_svi(k, iv, T, prev)
     Kq, q = density(F, T, params)
 
     # Raw call curve (OTM puts converted by parity) for the naive comparison.

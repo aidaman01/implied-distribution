@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from rnd.core import analyze, black, density, implied_vol, lognormal_pdf, moments, parity_forward
+from rnd.core import analyze, black, calendar_violation, density, implied_vol, lognormal_pdf, moments, parity_forward
+from rnd.__main__ import fit_surface
 from rnd.data import HESTON, heston_call, heston_cf, heston_pdf, load_cboe_csv, load_chain, synthetic_chain
 
 
@@ -152,6 +153,16 @@ def test_density_grid_holds_fat_left_tail():
     F, T = 7906.26, 0.50434
     s = moments(*density(F, T, (-0.074913, 0.163516, -0.302061, 0.015965, 0.522605)), F)
     assert abs(s["mass"] - 1) < 0.002 and abs(s["mean"] / F - 1) < 0.0015
+
+
+def test_surface_2019_calendar_arbitrage_free():
+    """Whole-surface calendar no-arbitrage on the 2019 snapshot: total variance must not fall with
+    maturity at any strike two adjacent expiries both quote. Independent fits fell by up to 2.9e-3."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "spxw_20190626.csv")
+    slices, skipped = fit_surface(lambda e: load_cboe_csv(path, e), pd.read_csv(path)["expiration"].unique())
+    assert len(slices) == 27 and [why.endswith("days < 7") for _, why in skipped] == [True] * 3
+    drop, k, T1, T2 = calendar_violation(slices)
+    assert drop <= 0, (drop, k, T1, T2)
 
 
 if __name__ == "__main__":
