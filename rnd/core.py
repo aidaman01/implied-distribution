@@ -7,6 +7,10 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.special import ndtr
 
+# Density grid half-width in ATM std devs. The no-arbitrage penalty covers 1.5x this range, so the
+# density cannot go negative anywhere on the grid.
+WIDTH = 16.0
+
 
 def black(F, K, T, vol, call=True):
     """Undiscounted Black-76 price (multiply by the discount factor for the market price)."""
@@ -68,7 +72,7 @@ def fit_svi(k, iv, T):
     lb = [-w.max(), 1e-6, -0.999, k.min() - 0.5, 1e-4]
     ub = [w.max(), 1.0, 0.999, k.max() + 0.5, 2.0]
     sd0 = np.sqrt(np.interp(0.0, k, w))  # rough ATM total std dev
-    k_pen = np.linspace(min(k.min(), -12 * sd0), max(k.max(), 12 * sd0), 300)
+    k_pen = np.linspace(min(k.min(), -1.5 * WIDTH * sd0), max(k.max(), 1.5 * WIDTH * sd0), 300)
 
     def to_raw(x):
         a, u, rho, m, s = x
@@ -92,8 +96,10 @@ def fit_svi(k, iv, T):
     return to_raw(best.x)
 
 
-def density(F, T, params, n=4001, width=8.0):
-    """Breeden-Litzenberger on the smooth SVI call curve. Returns strikes K and density q(K)."""
+def density(F, T, params, n=4001, width=WIDTH):
+    """Breeden-Litzenberger on the smooth SVI call curve. Returns strikes K and density q(K).
+    The grid spans +-width ATM std devs: SPX's left tail is fat, and +-8 left 0.56% of the mass
+    of a live 6-month expiry below the grid (strikes were quoted far below its edge)."""
     sd = np.sqrt(svi(0.0, *params))  # ATM total std dev
     K = np.linspace(F * np.exp(-width * sd), F * np.exp(width * sd), n)
     C = black(F, K, T, np.sqrt(svi(np.log(K / F), *params) / T))

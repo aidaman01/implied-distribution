@@ -1,13 +1,14 @@
 """Every test checks against a known answer. Run: python -m pytest  (or python tests/test_rnd.py)"""
 import os
 import sys
+import types
 
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from rnd.core import analyze, black, implied_vol, lognormal_pdf, parity_forward
-from rnd.data import HESTON, heston_call, heston_cf, heston_pdf, load_cboe_csv, synthetic_chain
+from rnd.core import analyze, black, density, implied_vol, lognormal_pdf, moments, parity_forward
+from rnd.data import HESTON, heston_call, heston_cf, heston_pdf, load_cboe_csv, load_chain, synthetic_chain
 
 
 def tv(K, q, truth):
@@ -117,6 +118,40 @@ def test_real_spx_quotes_all_expiries():
 def test_naive_breeden_litzenberger_fails_on_noise():
     chain, T, _ = synthetic_chain()
     assert (analyze(chain, T)["naive"][1] < 0).mean() > 0.10
+
+
+def test_live_loader_drops_stale_quotes():
+    """Yahoo keeps showing the last bid/ask of contracts that stopped trading. On live SPX (2026-10-14)
+    such quotes pushed the parity rate to 38%. Feed load_chain a fake yfinance chain with the same flaw."""
+    now = pd.Timestamp.now(tz="America/New_York")
+    expiry = (now + pd.Timedelta(days=182)).strftime("%Y-%m-%d")
+    T = (pd.Timestamp(expiry + " 16:00", tz="America/New_York") - now).total_seconds() / (365.25 * 86400)
+    chain, _, DF = synthetic_chain(T=T, r=0.04)
+    stale = chain["strike"] < 80                                       # deep in-the-money calls, two months old,
+    call = chain["call_mid"] + np.where(stale, DF * 10, 0)            # quoted when the forward was 110
+
+    def side(mid, old):
+        return pd.DataFrame({"strike": chain["strike"], "bid": mid - 0.005, "ask": mid + 0.005,
+                             "lastTradeDate": now - pd.to_timedelta(np.where(old, 60, 0), unit="D")})
+
+    calls, puts = side(call, stale), side(chain["put_mid"], False)
+    yahoo = types.SimpleNamespace(options=(expiry,), option_chain=lambda e: types.SimpleNamespace(calls=calls, puts=puts))
+    real = sys.modules.get("yfinance")
+    sys.modules["yfinance"] = types.SimpleNamespace(Ticker=lambda ticker: yahoo)
+    try:
+        live, T_live, _ = load_chain("^SPX", expiry)
+    finally:
+        sys.modules["yfinance"] = real
+    r = analyze(live, T_live)
+    assert abs(-np.log(r["DF"]) / T_live - 0.04) < 0.003 and abs(r["F"] / 100 - 1) < 1e-3
+
+
+def test_density_grid_holds_fat_left_tail():
+    """SVI fitted to live SPX (2026-10-14), 6-month expiry. A +-8 sd grid lost 0.56% of the probability
+    off its left edge, putting the mean 40 bp above the forward. All of it must be on the grid."""
+    F, T = 7906.26, 0.50434
+    s = moments(*density(F, T, (-0.074913, 0.163516, -0.302061, 0.015965, 0.522605)), F)
+    assert abs(s["mass"] - 1) < 0.002 and abs(s["mean"] / F - 1) < 0.0015
 
 
 if __name__ == "__main__":

@@ -31,6 +31,10 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30):
     if c_ok.mean() < 0.5 or p_ok.mean() < 0.5:
         raise RuntimeError("Most bid/ask quotes are empty (US market closed?). Run during "
                            "US hours, 9:30-16:00 New York time, for real two-sided quotes.")
+    # Yahoo keeps showing the last bid/ask of contracts that stopped trading. On live SPX, quotes
+    # last traded over a month ago were up to 1549 points off parity and pushed the implied rate to 38%.
+    for d, col in ((c, "call_mid"), (p, "put_mid")):
+        d.loc[now - pd.to_datetime(d["lastTradeDate"], utc=True) > pd.Timedelta(days=30), col] = np.nan
     # SPX monthly and SPXW weekly contracts can share an expiry date and strike: one row per strike.
     c = c.groupby("strike", as_index=False)["call_mid"].mean()
     p = p.groupby("strike", as_index=False)["put_mid"].mean()
