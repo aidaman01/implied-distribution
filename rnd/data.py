@@ -17,7 +17,12 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30):
     tk = yf.Ticker(ticker)
     now = pd.Timestamp.now(tz="America/New_York")
     if expiry is None:
-        expiry = next(e for e in tk.options if (pd.Timestamp(e, tz="America/New_York") - now).days >= min_days)
+        later = [e for e in tk.options if (pd.Timestamp(e, tz="America/New_York") - now).days >= min_days]
+        if not later:
+            raise RuntimeError(f"No {ticker} expiry at least {min_days} days out (got {tk.options!r}).")
+        expiry = later[0]
+    elif expiry not in tk.options:
+        raise RuntimeError(f"{expiry} is not a listed {ticker} expiry. Listed: {', '.join(tk.options)}")
     ch = tk.option_chain(expiry)
 
     c, p = ch.calls.copy(), ch.puts.copy()
@@ -26,7 +31,10 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30):
     if c_ok.mean() < 0.5 or p_ok.mean() < 0.5:
         raise RuntimeError("Most bid/ask quotes are empty (US market closed?). Run during "
                            "US hours, 9:30-16:00 New York time, for real two-sided quotes.")
-    chain = c[["strike", "call_mid"]].merge(p[["strike", "put_mid"]], on="strike", how="outer")
+    # SPX monthly and SPXW weekly contracts can share an expiry date and strike: one row per strike.
+    c = c.groupby("strike", as_index=False)["call_mid"].mean()
+    p = p.groupby("strike", as_index=False)["put_mid"].mean()
+    chain = c.merge(p, on="strike", how="outer")
 
     close = pd.Timestamp(expiry + " 16:00", tz="America/New_York")
     T = (close - now).total_seconds() / (365.25 * 86400)
