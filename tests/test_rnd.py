@@ -7,8 +7,10 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 from rnd.core import analyze, black, calendar_violation, density, implied_vol, lognormal_pdf, moments, parity_forward
 from rnd.__main__ import fit_surface
+from download import spxw_2019
 from rnd.data import HESTON, heston_call, heston_cf, heston_pdf, load_cboe_csv, load_chain, synthetic_chain
 
 
@@ -93,9 +95,9 @@ def test_robust_to_bad_wing_quotes():
 
 
 def test_real_spx_quotes_all_expiries():
-    """Real Cboe SPXW snapshot, 2019-06-26 15:45 (tests/data). No true density exists for real data,
+    """Real Cboe SPXW snapshot, 2019-06-26 15:45 (fetched by tests/data/download.py). No true density exists for real data,
     so check what must hold: probabilities, forward, rates, calendar no-arbitrage, equity skew."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "spxw_20190626.csv")
+    path = spxw_2019()
     spot = (2917.80 + 2918.42) / 2  # SPX bid/ask in the same file
     atm_var = []
     for e in sorted(pd.read_csv(path)["expiration"].unique()):
@@ -158,11 +160,27 @@ def test_density_grid_holds_fat_left_tail():
 def test_surface_2019_calendar_arbitrage_free():
     """Whole-surface calendar no-arbitrage on the 2019 snapshot: total variance must not fall with
     maturity at any strike two adjacent expiries both quote. Independent fits fell by up to 2.9e-3."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "spxw_20190626.csv")
+    path = spxw_2019()
     slices, skipped = fit_surface(lambda e: load_cboe_csv(path, e), pd.read_csv(path)["expiration"].unique())
     assert len(slices) == 27 and [why.endswith("days < 7") for _, why in skipped] == [True] * 3
     drop, k, T1, T2 = calendar_violation(slices)
     assert drop <= 0, (drop, k, T1, T2)
+
+
+def test_snapshot_download_is_verified():
+    """The Cboe snapshot is not committed; download.py fetches it and must replace a corrupt copy."""
+    import download
+    tmp = os.path.join(os.path.dirname(download.PATH), "_check.csv")
+    with open(tmp, "w") as f:
+        f.write("corrupt")
+    real, download.PATH = download.PATH, tmp
+    try:
+        path = download.spxw_2019()
+        d = pd.read_csv(path)
+    finally:
+        download.PATH = real
+        os.remove(tmp)
+    assert path == tmp and d.shape == (10384, 12) and (d["quote_date"] == "2019-06-26").all()
 
 
 if __name__ == "__main__":

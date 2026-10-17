@@ -3,3 +3,4 @@ __pycache__/
 rnd.png
 .venv/
 .DS_Store
+tests/data/*.csv

@@ -55,12 +55,13 @@ All of it is in [`rnd/core.py`](rnd/core.py), about 170 lines.
 | ATM total variance rises with maturity (calendar no-arbitrage) | yes |
 | Skew | negative on every expiry (−1.4 to −2.6); 2-σ crash probability 4.2–7.6% vs lognormal 2.3–2.7% |
 
-The data is from the open-source [volkit](https://github.com/sitmo/volkit) project (BSD-3); see [`tests/data`](tests/data).
+The quotes are Cboe market data, published in the open-source [volkit](https://github.com/sitmo/volkit) project. They are not committed here: `python tests/data/download.py` fetches them (the tests do it automatically) and checks a SHA-256 hash. See [`tests/data`](tests/data).
 
 ## Run
 
 ```
 pip install -r requirements.txt
+python tests/data/download.py                                           # 2019 Cboe snapshot for --csv
 python -m rnd --demo                                                    # known truth
 python -m rnd --csv tests/data/spxw_20190626.csv --expiry 2019-07-26    # real quotes, offline
 python -m rnd ^SPX                                                      # live, first expiry ≥ 30 days
