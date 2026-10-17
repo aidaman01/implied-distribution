@@ -10,7 +10,7 @@ def _mid(df):
 
 
 def load_chain(ticker="^SPX", expiry=None, min_days=30):
-    """Live chain from Yahoo. Returns (chain, T, expiry). ^SPX is European: the right
+    """Live chain from Yahoo. Returns (chain, T, expiry, quote time). ^SPX is European: the right
     instrument for Breeden-Litzenberger. SPY works but is American (small early-exercise bias)."""
     import yfinance as yf
 
@@ -40,9 +40,17 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30):
     p = p.groupby("strike", as_index=False)["put_mid"].mean()
     chain = c.merge(p, on="strike", how="outer")
 
+    # After the close (weekends too) Yahoo keeps the last session's quotes: on Saturday 2026-10-17,
+    # 97-99% were still two-sided, last traded Friday 16:14, and parity gave a discount factor of 1.018.
+    # Time quotes by the newest trade (Yahoo delays ~15 min) and refuse a closed session's leftovers.
+    asof = min(now, max(pd.to_datetime(d["lastTradeDate"], utc=True).max() for d in (ch.calls, ch.puts)))
+    asof = asof.tz_convert("America/New_York")
+    if now - asof > pd.Timedelta(hours=1):
+        raise RuntimeError(f"Newest {ticker} quote is from {asof:%a %Y-%m-%d %H:%M} New York: the market is "
+                           "closed. Run during US hours, 9:30-16:00 New York time, for live quotes.")
     close = pd.Timestamp(expiry + " 16:00", tz="America/New_York")
-    T = (close - now).total_seconds() / (365.25 * 86400)
-    return chain, T, expiry
+    T = (close - asof).total_seconds() / (365.25 * 86400)
+    return chain, T, expiry, asof
 
 
 def load_cboe_csv(path, expiry):

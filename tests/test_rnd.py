@@ -142,7 +142,7 @@ def test_live_loader_drops_stale_quotes():
     real = sys.modules.get("yfinance")
     sys.modules["yfinance"] = types.SimpleNamespace(Ticker=lambda ticker: yahoo)
     try:
-        live, T_live, _ = load_chain("^SPX", expiry)
+        live, T_live, _, _ = load_chain("^SPX", expiry)
     finally:
         sys.modules["yfinance"] = real
     r = analyze(live, T_live)
@@ -181,6 +181,37 @@ def test_snapshot_download_is_verified():
         download.PATH = real
         os.remove(tmp)
     assert path == tmp and d.shape == (10384, 12) and (d["quote_date"] == "2019-06-26").all()
+
+
+def test_live_quotes_timed_and_closed_session_refused():
+    """Yahoo delays quotes ~15 min, and after the close it keeps the last session's quotes (seen on
+    Saturday 2026-10-17, discount factor 1.018). T runs from the newest trade; a closed session stops."""
+    now = pd.Timestamp.now(tz="America/New_York")
+    expiry = (now + pd.Timedelta(days=60)).strftime("%Y-%m-%d")
+    chain, _, _ = synthetic_chain(T=60 / 365.25)
+    real = sys.modules.get("yfinance")
+
+    def load(newest):
+        side = lambda mid: pd.DataFrame({"strike": chain["strike"], "bid": mid - 0.005, "ask": mid + 0.005,
+                                         "lastTradeDate": [newest - pd.Timedelta(minutes=m) for m in range(len(chain))]})
+        calls, puts = side(chain["call_mid"]), side(chain["put_mid"])
+        yahoo = types.SimpleNamespace(options=(expiry,), option_chain=lambda e: types.SimpleNamespace(calls=calls, puts=puts))
+        sys.modules["yfinance"] = types.SimpleNamespace(Ticker=lambda ticker: yahoo)
+        try:
+            return load_chain("^SPX", expiry)
+        finally:
+            sys.modules["yfinance"] = real
+
+    delayed = now - pd.Timedelta(minutes=15)
+    _, T, _, asof = load(delayed)
+    close = pd.Timestamp(expiry + " 16:00", tz="America/New_York")
+    assert asof == delayed and abs(T - (close - delayed).total_seconds() / (365.25 * 86400)) < 1e-12
+    try:
+        load(now - pd.Timedelta(hours=37))                              # Friday close, read on Saturday
+    except RuntimeError as e:
+        assert "market is closed" in str(e)
+    else:
+        raise AssertionError("a closed session's quotes were used")
 
 
 if __name__ == "__main__":

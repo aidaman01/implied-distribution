@@ -159,9 +159,9 @@ def main():
         Kq, q = r["density"]
         print(f"  error vs truth: total variation {0.5 * np.abs(q - truth).sum() * (Kq[1] - Kq[0]):.2%}")
     else:
-        chain, T, expiry = load_chain(a.ticker, a.expiry)
+        chain, T, expiry, asof = load_chain(a.ticker, a.expiry)
         r = analyze(chain, T)
-        title, truth = f"{a.ticker} options expiring {expiry}", None
+        title, truth = f"{a.ticker} options expiring {expiry}, quotes as of {asof:%Y-%m-%d %H:%M} New York", None
         report(r, title)
     plot(r, title, out, truth)
 

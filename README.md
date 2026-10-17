@@ -70,7 +70,7 @@ python -m rnd --csv tests/data/spxw_20190626.csv --surface                # impl
 python -m rnd ^SPX --surface --out surface_live.png
 ```
 
-Live data comes from Yahoo Finance (free, via yfinance). Run it during US market hours: 9:30–16:00 New York, which is 18:30–01:00 Almaty, or 19:30–02:00 after US clocks change on Nov 1. Outside those hours Yahoo returns empty bid/ask, and the loader stops with a clear message rather than use stale prices. `--csv` reads any file in Cboe's end-of-day format.
+Live data comes from Yahoo Finance (free, via yfinance). Run it during US market hours: 9:30–16:00 New York, which is 18:30–01:00 Almaty, or 19:30–02:00 after US clocks change on Nov 1. Outside those hours Yahoo still shows the last session's quotes: on a Saturday, 97–99% of contracts were two-sided and put-call parity on them gave a discount factor of 1.018. So the loader times the quotes by the newest trade in the chain (which also accounts for Yahoo's ~15-minute delay) and stops with a clear message if that trade is more than an hour old. `--csv` reads any file in Cboe's end-of-day format.
 
 Output: forward, ATM vol, skew, excess kurtosis, the market's probability of a 2-standard-deviation drop versus the lognormal (Black-Scholes) answer, and the chart.
 
