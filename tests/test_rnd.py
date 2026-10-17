@@ -11,7 +11,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 from rnd.core import analyze, black, calendar_violation, density, implied_vol, lognormal_pdf, moments, parity_forward
-from rnd.__main__ import fit_surface
+from rnd.__main__ import fit_surface, plot
 from download import spxw_2019
 from rnd.data import HESTON, heston_call, heston_cf, heston_pdf, load_cboe_csv, load_chain, synthetic_chain
 
@@ -232,6 +232,19 @@ def test_surface_cli():
         assert "calendar no-arbitrage holds" in ok.stdout, ok.stdout
         assert sorted(os.listdir(tmp)) == ["july.csv", "rnd_surface.png", "short.csv"]
         assert short.returncode == 1 and "at least two fitted expiries" in short.stderr, short.stdout + short.stderr
+
+
+def test_chart_states_computed_crash_probability():
+    """The density panel's title carries the headline numbers; they must be the computed ones."""
+    import matplotlib.pyplot as plt
+    chain, T, _ = synthetic_chain()
+    r = analyze(chain, T)
+    with tempfile.TemporaryDirectory() as tmp:
+        plot(r, "test", os.path.join(tmp, "c.png"))
+        title = plt.gcf().axes[1].get_title()
+        assert os.path.getsize(os.path.join(tmp, "c.png")) > 10_000
+    plt.close("all")
+    assert f"= {r['p_crash']:.1%}; lognormal {r['p_crash_lognormal']:.1%}" in title, title
 
 
 if __name__ == "__main__":

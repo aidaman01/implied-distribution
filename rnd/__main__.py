@@ -52,11 +52,15 @@ def plot(r, title, out, truth=None):
     if truth is not None:
         a2.plot(Kq, truth, color=INK, lw=1, label="true density")
     a2.plot(Kq, q, color=BLUE, lw=2, label="implied (SVI + Breeden-Litzenberger)")
+    tail = Kq <= r["crash_level"]
+    a2.fill_between(Kq[tail], q[tail], color=BLUE, alpha=0.25, lw=0)
     a2.axhline(0, color=MUTED, lw=0.8)
     a2.set(xlim=(lo, hi), ylim=(min(0, np.percentile(qn, 5)) * 1.2, q.max() * 1.6),
-           xlabel="price at expiry", ylabel="risk-neutral density", title="Market-implied distribution")
-    for a in (a1, a2):
-        a.legend(frameon=False, fontsize=9)
+           xlabel="price at expiry", ylabel="risk-neutral density",
+           title=f"Market-implied distribution\nshaded: P(drop > {1 - r['crash_level'] / F:.1%}, 2 sd) = "
+                 f"{r['p_crash']:.1%}; lognormal {r['p_crash_lognormal']:.1%}")
+    a1.legend(frameon=False, fontsize=9)
+    a2.legend(frameon=False, fontsize=9, loc="upper left")
     fig.suptitle(title, x=0.01, ha="left", fontsize=12, color=INK)
     fig.tight_layout()
     fig.savefig(out, dpi=150, facecolor="white")
