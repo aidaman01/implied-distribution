@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Implied Distribution: market-implied probability distribution of the S&P 500 from option prices"
+authors:
+  - family-names: Bliyev
+    given-names: Aidan
+repository-code: "https://github.com/aidaman01/implied-distribution"
+license: MIT
+keywords:
+  - risk-neutral density
+  - Breeden-Litzenberger
+  - SVI
+  - implied volatility
+  - options
