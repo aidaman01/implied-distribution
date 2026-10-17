@@ -1,6 +1,8 @@
 """Every test checks against a known answer. Run: python -m pytest  (or python tests/test_rnd.py)"""
 import os
+import subprocess
 import sys
+import tempfile
 import types
 
 import numpy as np
@@ -212,6 +214,21 @@ def test_live_quotes_timed_and_closed_session_refused():
         assert "market is closed" in str(e)
     else:
         raise AssertionError("a closed session's quotes were used")
+
+
+def test_surface_cli():
+    """python -m rnd --csv FILE --surface: writes its own default file (never the committed surface.png),
+    reports the calendar check, and stops cleanly when fewer than two expiries can be fitted."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    d = pd.read_csv(spxw_2019())
+    with tempfile.TemporaryDirectory() as tmp:
+        d[d["expiration"] <= "2019-07-01"].to_csv(os.path.join(tmp, "short.csv"), index=False)  # all under 7 days
+        run = lambda csv: subprocess.run([sys.executable, "-m", "rnd", "--csv", csv, "--surface"], cwd=tmp,
+                                         env={**os.environ, "PYTHONPATH": root}, capture_output=True, text=True)
+        ok, short = run(spxw_2019()), run("short.csv")
+        assert ok.returncode == 0 and "calendar no-arbitrage holds" in ok.stdout, ok.stdout + ok.stderr
+        assert sorted(os.listdir(tmp)) == ["rnd_surface.png", "short.csv"]
+        assert short.returncode == 1 and "at least two fitted expiries" in short.stderr, short.stdout + short.stderr
 
 
 if __name__ == "__main__":

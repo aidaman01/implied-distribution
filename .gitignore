@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 rnd.png
+rnd_surface.png
 .venv/
 .DS_Store
 tests/data/*.csv

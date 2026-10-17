@@ -91,6 +91,8 @@ def plot_surface(slices, title, out, max_T=1.0):
     """Implied vol over a regular (ln K/F, T) grid: expiries up to max_T years, strikes quoted on every
     one of them (no extrapolation). Total variance is linear in T between expiries."""
     shown = [s for s in slices if s[0] <= max_T]
+    if len(shown) < 2:
+        raise SystemExit(f"A surface needs at least two fitted expiries up to {max_T:g} years.")
     Ts = np.array([s[0] for s in shown])
     lo, hi = max(s[1] for s in shown), min(s[2] for s in shown)
     print(f"  surface: {len(shown)} expiries, T {Ts[0]:.3f}-{Ts[-1]:.3f}y, ln(K/F) {lo:.3f} to {hi:.3f}")
@@ -116,10 +118,10 @@ def main():
     ap.add_argument("--demo", action="store_true", help="offline: noisy Heston quotes with known truth")
     ap.add_argument("--csv", help="offline: Cboe end-of-day quote file (needs --expiry), e.g. tests/data/spxw_20190626.csv")
     ap.add_argument("--surface", action="store_true", help="SVI on every expiry -> 3D implied vol surface")
-    ap.add_argument("--out", help="chart file (default rnd.png, or surface.png with --surface)")
+    ap.add_argument("--out", help="chart file (default rnd.png, or rnd_surface.png with --surface)")
     a = ap.parse_args()
 
-    out = a.out or ("surface.png" if a.surface else "rnd.png")
+    out = a.out or ("rnd_surface.png" if a.surface else "rnd.png")
     if a.surface:
         if a.csv:
             expiries = sorted(pd.read_csv(a.csv)["expiration"].unique())
@@ -134,6 +136,8 @@ def main():
         print(f"\n{title}\n  {len(slices)} expiries fitted, {len(skipped)} skipped")
         for e, why in skipped:
             print(f"    skipped {e}: {why}")
+        if len(slices) < 2:
+            raise SystemExit("A surface needs at least two fitted expiries; see the skipped list above.")
         drop, k, T1, T2 = calendar_violation(slices)
         if drop > 0:
             print(f"  calendar arbitrage: total variance falls by {drop:.2e} at ln(K/F) = {k:.3f}"

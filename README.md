@@ -66,7 +66,7 @@ python -m rnd --demo                                                    # known 
 python -m rnd --csv tests/data/spxw_20190626.csv --expiry 2019-07-26    # real quotes, offline
 python -m rnd ^SPX                                                      # live, first expiry ≥ 30 days
 python -m rnd ^SPX --expiry 2026-12-18
-python -m rnd --csv tests/data/spxw_20190626.csv --surface                # implied vol surface -> surface.png
+python -m rnd --csv tests/data/spxw_20190626.csv --surface --out surface.png  # implied vol surface
 python -m rnd ^SPX --surface --out surface_live.png
 ```
 
