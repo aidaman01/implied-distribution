@@ -223,11 +223,14 @@ def test_surface_cli():
     d = pd.read_csv(spxw_2019())
     with tempfile.TemporaryDirectory() as tmp:
         d[d["expiration"] <= "2019-07-01"].to_csv(os.path.join(tmp, "short.csv"), index=False)  # all under 7 days
+        d[d["expiration"].isin(["2019-07-05", "2019-07-12", "2019-07-19", "2019-07-26"])].to_csv(
+            os.path.join(tmp, "july.csv"), index=False)                 # 4 expiries keep the test fast
         run = lambda csv: subprocess.run([sys.executable, "-m", "rnd", "--csv", csv, "--surface"], cwd=tmp,
                                          env={**os.environ, "PYTHONPATH": root}, capture_output=True, text=True)
-        ok, short = run(spxw_2019()), run("short.csv")
-        assert ok.returncode == 0 and "calendar no-arbitrage holds" in ok.stdout, ok.stdout + ok.stderr
-        assert sorted(os.listdir(tmp)) == ["rnd_surface.png", "short.csv"]
+        ok, short = run("july.csv"), run("short.csv")
+        assert ok.returncode == 0 and "4 expiries fitted" in ok.stdout, ok.stdout + ok.stderr
+        assert "calendar no-arbitrage holds" in ok.stdout, ok.stdout
+        assert sorted(os.listdir(tmp)) == ["july.csv", "rnd_surface.png", "short.csv"]
         assert short.returncode == 1 and "at least two fitted expiries" in short.stderr, short.stdout + short.stderr
 
 

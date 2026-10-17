@@ -27,7 +27,7 @@ All of it is in [`rnd/core.py`](rnd/core.py), about 170 lines.
 
 ## Validation
 
-`python tests/test_rnd.py` (or `python -m pytest`), 12 tests, about 30 seconds of computation.
+`python tests/test_rnd.py`: 15 tests, about 65 seconds on a MacBook Air (M-series); most of it is the 27-expiry surface fit.
 
 **Known truth.** Noisy, tick-rounded quotes generated from a Heston stochastic-volatility model, whose density is exact by Fourier inversion.
 
