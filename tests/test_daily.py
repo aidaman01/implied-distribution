@@ -26,20 +26,24 @@ def tv(K, q, truth):
 
 
 def fake_yahoo(now, days=(20, 28, 31, 45), quotes_age=timedelta(minutes=15), spot_age=None, fail=0,
-               empty_quotes=False):
+               empty_quotes=False, spx_only=()):
     """A yfinance stand-in: Heston quotes (forward 100) for expiries `days` calendar days out, all last
     traded `quotes_age` before `now` (the SPX level `spot_age` before, default the same). The first
-    `fail` Ticker() calls raise ConnectionError; `empty_quotes` blanks every bid and ask."""
+    `fail` Ticker() calls raise ConnectionError; `empty_quotes` blanks every bid and ask. Contracts are
+    SPXW, except for the expiries `spx_only` days out, which list AM-settled SPX only."""
     asof = pd.Timestamp(now - quotes_age)
     spot_at = pd.Timestamp(now - (quotes_age if spot_age is None else spot_age))
     expiries = tuple((now + timedelta(days=d)).strftime("%Y-%m-%d") for d in days)
+    am_only = {(now + timedelta(days=d)).strftime("%Y-%m-%d") for d in spx_only}
     calls = {"n": 0}
 
     def chain(expiry):
         T = (pd.Timestamp(expiry + " 16:00", tz=NY) - asof).total_seconds() / (365.25 * 86400)
         c, _, _ = synthetic_chain(T=T)
         blank = 0.0 if empty_quotes else 1.0
-        side = lambda mid: pd.DataFrame({"strike": c["strike"], "bid": blank * (mid - 0.005),
+        root = "SPX" if expiry in am_only else "SPXW"
+        side = lambda mid: pd.DataFrame({"contractSymbol": [f"{root}000000C{int(k * 1000):08d}" for k in c["strike"]],
+                                         "strike": c["strike"], "bid": blank * (mid - 0.005),
                                          "ask": blank * (mid + 0.005), "lastTradeDate": [asof] * len(c)})
         return types.SimpleNamespace(calls=side(c["call_mid"]), puts=side(c["put_mid"]))
 
@@ -255,6 +259,27 @@ def test_fit_failure_is_recorded_and_fails_the_run():
             assert "SVI did not converge" in rows(os.path.join(d, daily.SKIPPED_FILE))[0]["reason"]
     finally:
         daily.analyze = real
+
+
+def test_bracket_expiry_without_spxw_moves_to_the_nearest_spxw_and_is_flagged():
+    """Only PM-settled SPXW is used. If the near expiry (28 days) lists AM-settled SPX only, the next
+    SPXW expiry inward (20 days) is used instead, never the SPX monthly, and the row says so."""
+    yahoo, _ = fake_yahoo(WINTER_RUN, spx_only=(28,))
+    with tempfile.TemporaryDirectory() as d:
+        status, _, code = run(WINTER_RUN, yahoo, d)
+        r = rows(os.path.join(d, daily.DATA_FILE))[0]
+    assert (status, code, r["near_expiry"], r["next_expiry"]) == ("written", 0, "2027-01-05", "2027-01-16")
+    # The note comes first; the 20-day fit may add its own flags (its parity rate is noisy at 20 days).
+    assert r["quality_ok"] == "False" and r["quality_flags"].startswith(
+        "near: 2027-01-13 has no SPXW contracts, used 2027-01-05"), r["quality_flags"]
+
+
+def test_no_spxw_on_either_side_is_a_failed_run():
+    yahoo, _ = fake_yahoo(WINTER_RUN, days=(28, 31), spx_only=(28, 31))
+    with tempfile.TemporaryDirectory() as d:
+        status, message, code = run(WINTER_RUN, yahoo, d)
+        assert (status, code) == ("skipped", 1) and "no SPXW" in message, message
+        assert rows(os.path.join(d, daily.DATA_FILE)) == []
 
 
 def test_repeated_skips_with_the_same_reason_change_nothing():

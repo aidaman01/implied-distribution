@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dat
 from rnd.core import analyze, black, calendar_violation, density, implied_vol, lognormal_pdf, moments, parity_forward
 from rnd.__main__ import fit_surface, plot
 from download import spxw_2019
-from rnd.data import HESTON, heston_call, heston_cf, heston_pdf, load_cboe_csv, load_chain, synthetic_chain
+from rnd.data import HESTON, NoContracts, heston_call, heston_cf, heston_pdf, load_cboe_csv, load_chain, synthetic_chain
 
 
 def tv(K, q, truth):
@@ -136,7 +136,8 @@ def test_live_loader_drops_stale_quotes():
     call = chain["call_mid"] + np.where(stale, DF * 10, 0)            # quoted when the forward was 110
 
     def side(mid, old):
-        return pd.DataFrame({"strike": chain["strike"], "bid": mid - 0.005, "ask": mid + 0.005,
+        return pd.DataFrame({"contractSymbol": "SPXW261218C00100000", "strike": chain["strike"], "bid": mid - 0.005,
+                             "ask": mid + 0.005,
                              "lastTradeDate": now - pd.to_timedelta(np.where(old, 60, 0), unit="D")})
 
     calls, puts = side(call, stale), side(chain["put_mid"], False)
@@ -194,7 +195,8 @@ def test_live_quotes_timed_and_closed_session_refused():
     real = sys.modules.get("yfinance")
 
     def load(newest):
-        side = lambda mid: pd.DataFrame({"strike": chain["strike"], "bid": mid - 0.005, "ask": mid + 0.005,
+        side = lambda mid: pd.DataFrame({"contractSymbol": "SPXW261218C00100000", "strike": chain["strike"], "bid": mid - 0.005,
+                                         "ask": mid + 0.005,
                                          "lastTradeDate": [newest - pd.Timedelta(minutes=m) for m in range(len(chain))]})
         calls, puts = side(chain["call_mid"]), side(chain["put_mid"])
         yahoo = types.SimpleNamespace(options=(expiry,), option_chain=lambda e: types.SimpleNamespace(calls=calls, puts=puts))
@@ -214,6 +216,41 @@ def test_live_quotes_timed_and_closed_session_refused():
         assert "market is closed" in str(e)
     else:
         raise AssertionError("a closed session's quotes were used")
+
+
+def test_live_loader_uses_only_pm_settled_spxw():
+    """Third Fridays list AM-settled SPX monthlies next to PM-settled SPXW (Yahoo, 2026-12-18: 676 SPX
+    and 429 SPXW contracts). Only SPXW is used, so time runs to the 16:00 settlement; a date with no
+    SPXW raises NoContracts instead of falling back to SPX."""
+    now = pd.Timestamp.now(tz="America/New_York")
+    expiry = (now + pd.Timedelta(days=60)).strftime("%Y-%m-%d")
+    chain, _, DF = synthetic_chain(T=60 / 365.25)
+    real = sys.modules.get("yfinance")
+
+    def side(mid, root, shift=0.0):
+        return pd.DataFrame({"contractSymbol": [f"{root}261218C{int(k * 1000):08d}" for k in chain["strike"]],
+                             "strike": chain["strike"], "bid": mid + shift - 0.005, "ask": mid + shift + 0.005,
+                             "lastTradeDate": [now - pd.Timedelta(minutes=15)] * len(chain)})
+
+    def load(calls, puts):
+        yahoo = types.SimpleNamespace(options=(expiry,), option_chain=lambda e: types.SimpleNamespace(calls=calls, puts=puts))
+        sys.modules["yfinance"] = types.SimpleNamespace(Ticker=lambda ticker: yahoo)
+        try:
+            return load_chain("^SPX", expiry)
+        finally:
+            sys.modules["yfinance"] = real
+
+    # SPX rows priced off a forward 5 points higher: mixed in, they would move the forward by about 2.5.
+    pm = (side(chain["call_mid"], "SPXW"), side(chain["put_mid"], "SPXW"))
+    am = (side(chain["call_mid"], "SPX", shift=DF * 5), side(chain["put_mid"], "SPX"))
+    live, T, _, _ = load(pd.concat([pm[0], am[0]]), pd.concat([pm[1], am[1]]))
+    assert abs(analyze(live, T)["F"] / 100 - 1) < 1e-3
+    try:
+        load(*am)
+    except NoContracts as e:
+        assert "SPXW" in str(e)
+    else:
+        raise AssertionError("SPX monthlies were used when no SPXW was listed")
 
 
 def test_surface_cli():

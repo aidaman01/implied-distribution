@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from .core import analyze, density_w, lognormal_cdf, moments, svi
-from .data import MarketClosed, load_chain
+from .data import ROOTS, MarketClosed, NoContracts, load_chain
 
 log = logging.getLogger("rnd.daily")
 
@@ -37,6 +37,7 @@ RATE_RANGE = (0.0, 0.10)                # implied rate from put-call parity
 NEG_MASS_TOL = 1e-5                     # negative probability after interpolation
 RETRY_WAITS = (30, 60)                  # seconds before the 2nd and the 3rd attempt
 MAX_SPOT_AGE = pd.Timedelta(hours=1)
+MAX_ROOT_WALK = 5                       # expiries tried per side when one lists no SPXW
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
@@ -165,24 +166,44 @@ def spot_level(tk, now: pd.Timestamp) -> tuple[float, pd.Timestamp]:
     return float(bars["Close"].iloc[-1]), at
 
 
+def load_root_chain(side: str, candidates: list[str], stamp: pd.Timestamp) -> tuple[tuple, list[str]]:
+    """The first candidate expiry that lists PM-settled SPXW contracts, never AM-settled SPX in its
+    place. Moving off the bracket expiry is reported as a quality note."""
+    for e in candidates[:MAX_ROOT_WALK]:
+        try:
+            got = load_chain(TICKER, e, now=stamp)
+        except NoContracts:
+            continue
+        moved = [] if e == candidates[0] else [f"{side}: {candidates[0]} has no {ROOTS[TICKER]} contracts, used {e}"]
+        return got, moved
+    raise NoContracts(f"no {ROOTS[TICKER]} contracts on the {side} expiry {candidates[0]} "
+                      f"or the {MAX_ROOT_WALK - 1} beyond it")
+
+
 def fetch(now: datetime) -> dict:
     """One attempt at everything the row needs from Yahoo."""
     import yfinance as yf
 
     stamp = pd.Timestamp(now).tz_convert(NY)
     tk = yf.Ticker(TICKER)
-    near, nxt = bracket(list(tk.options), now)
+    expiries = list(tk.options)
+    near, nxt = bracket(expiries, now)
+    future = sorted(e for e in expiries if years_to(e, now) > 0)
     spot, spot_time = spot_level(tk, stamp)
-    chains = {side: load_chain(TICKER, e, now=stamp) for side, e in (("near", near), ("next", nxt))}
-    return {"spot": spot, "spot_time": spot_time, "chains": chains}
+    chains, notes = {}, []
+    for side, candidates in (("near", [e for e in reversed(future) if e <= near]),
+                             ("next", [e for e in future if e >= nxt])):
+        chains[side], moved = load_root_chain(side, candidates, stamp)
+        notes += moved
+    return {"spot": spot, "spot_time": spot_time, "chains": chains, "notes": notes}
 
 
 def fetch_with_retries(now: datetime, sleep: Callable) -> dict:
-    """Retry Yahoo failures (not a closed market) twice, then give up with the last error."""
+    """Retry Yahoo failures (not a closed market, not a missing root) twice, then give up."""
     for attempt, wait in enumerate((*RETRY_WAITS, None), start=1):
         try:
             return fetch(now)
-        except MarketClosed:
+        except (MarketClosed, NoContracts):
             raise
         except Exception as e:  # network, rate limit, malformed reply: all worth a retry
             log.warning("Yahoo attempt %d failed: %s: %s", attempt, type(e).__name__, e)
@@ -199,8 +220,8 @@ def build_row(now: datetime, got: dict) -> dict:
     r2 = analyze(c2, T2, prev=(k1.min(), k1.max(), r1["params"]))
     slices = {"near": summarize_slice(e1, c1, r1), "next": summarize_slice(e2, c2, r2)}
     r30 = thirty_day(slices["near"], slices["next"], got["spot"])
-    flags = quality_flags(slices, {"mass": r30["mass_30d"], "mean_vs_fwd_bp": r30["mean_vs_fwd_bp_30d"],
-                                   "neg_mass": r30["neg_mass_30d"], "weight_near": r30["weight_near"]})
+    flags = got["notes"] + quality_flags(slices, {"mass": r30["mass_30d"], "mean_vs_fwd_bp": r30["mean_vs_fwd_bp_30d"],
+                                                  "neg_mass": r30["neg_mass_30d"], "weight_near": r30["weight_near"]})
     return {
         "date": now.astimezone(NY).date().isoformat(),
         "run_utc": now.astimezone(timezone.utc).isoformat(timespec="seconds"),
@@ -296,6 +317,9 @@ def run(now: datetime | None = None, data_dir: str = DATA_DIR,
     except MarketClosed as e:
         record_skip(skip_path, day, now, f"market closed: {e}")
         return "skipped", f"{day} skipped, market closed: {e}", 0
+    except NoContracts as e:
+        record_skip(skip_path, day, now, str(e))
+        return "skipped", f"{day} skipped, {e}", 1
     except RuntimeError as e:
         record_skip(skip_path, day, now, f"Yahoo error: {e}")
         return "skipped", f"{day} skipped, Yahoo error: {e}", 1

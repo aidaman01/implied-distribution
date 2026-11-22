@@ -13,6 +13,15 @@ class MarketClosed(RuntimeError):
     """Yahoo is showing a closed session's quotes: nothing live to analyse."""
 
 
+class NoContracts(LookupError):
+    """The expiry lists no contracts of the root this ticker is analysed with."""
+
+
+# Yahoo's ^SPX chain mixes roots on third Fridays: AM-settled SPX monthlies (settled at the open) next
+# to PM-settled SPXW (settled at the 16:00 close). Time to expiry is measured to 16:00, so only SPXW fits.
+ROOTS = {"^SPX": "SPXW"}
+
+
 def load_chain(ticker="^SPX", expiry=None, min_days=30, now=None):
     """Live chain from Yahoo. Returns (chain, T, expiry, quote time). ^SPX is European: the right
     instrument for Breeden-Litzenberger. SPY works but is American (small early-exercise bias).
@@ -30,18 +39,24 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30, now=None):
     elif expiry not in tk.options:
         raise RuntimeError(f"{expiry} is not a listed {ticker} expiry. Listed: {', '.join(tk.options)}")
     ch = tk.option_chain(expiry)
+    calls, puts = ch.calls, ch.puts
+    root = ROOTS.get(ticker)
+    if root:
+        calls, puts = (d[d["contractSymbol"].str.match(rf"{root}\d")] for d in (calls, puts))
+        if calls.empty or puts.empty:
+            raise NoContracts(f"{expiry} has no {root} contracts")
 
     # After the close (weekends too) Yahoo keeps the last session's quotes: on Saturday 2026-10-17,
     # 97-99% were still two-sided, last traded Friday 16:14, and parity gave a discount factor of 1.018.
     # Time quotes by the newest trade (Yahoo delays ~15 min) and refuse a closed session's leftovers.
     # This is checked first: a stale session is a closed market, empty quotes on a live one are not.
-    asof = min(now, max(pd.to_datetime(d["lastTradeDate"], utc=True).max() for d in (ch.calls, ch.puts)))
+    asof = min(now, max(pd.to_datetime(d["lastTradeDate"], utc=True).max() for d in (calls, puts)))
     asof = asof.tz_convert("America/New_York")
     if now - asof > pd.Timedelta(hours=1):
         raise MarketClosed(f"Newest {ticker} quote is from {asof:%a %Y-%m-%d %H:%M} New York: the market is "
                            "closed. Run during US hours, 9:30-16:00 New York time, for live quotes.")
 
-    c, p = ch.calls.copy(), ch.puts.copy()
+    c, p = calls.copy(), puts.copy()
     c["call_mid"], c_ok = _mid(c)
     p["put_mid"], p_ok = _mid(p)
     if c_ok.mean() < 0.5 or p_ok.mean() < 0.5:
@@ -51,7 +66,7 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30, now=None):
     # last traded over a month ago were up to 1549 points off parity and pushed the implied rate to 38%.
     for d, col in ((c, "call_mid"), (p, "put_mid")):
         d.loc[now - pd.to_datetime(d["lastTradeDate"], utc=True) > pd.Timedelta(days=30), col] = np.nan
-    # SPX monthly and SPXW weekly contracts can share an expiry date and strike: one row per strike.
+    # One row per strike, in case a root lists a strike twice.
     c = c.groupby("strike", as_index=False)["call_mid"].mean()
     p = p.groupby("strike", as_index=False)["put_mid"].mean()
     chain = c.merge(p, on="strike", how="outer")
