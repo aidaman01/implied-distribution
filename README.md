@@ -97,6 +97,24 @@ T-bill: U.S. Treasury daily bill rates, coupon equivalent. Negative probability 
 
 *Live ^SPX, 14 October 2026, 11:43 New York: 46 expiries fitted (5 under 7 days skipped, plus 2030 and 2031, which failed the mass and mean checks); 40 up to 1 year shown over ln(K/F) −0.325 to 0.066.*
 
+## Daily data
+
+**Question.** Does the crash probability priced into SPX options predict real S&P 500 drops and volatility better than the VIX does? Answering it needs a daily series, so [`rnd/daily.py`](rnd/daily.py) takes one snapshot of live ^SPX options per US trading day, at about 15:45 New York, and appends one row to `data/daily_crash_prob.csv` (created by the first run). The comparison with VIX and realized returns comes later; VIX and SKEW history will come from Cboe's free historical files.
+
+**Constant 30-day horizon, as in the VIX.** Listed expiries move closer every day, so a fixed expiry would give a different horizon each day. Each run takes Cboe's "30 Day Bracket" (the last expiry at most 30 days away and the first one after it, with time measured to the minute), fits SVI to both (the second with the calendar penalty against the first), and interpolates the smile to exactly 30 days: at each log-moneyness k = ln(K/F),
+
+`w30(k) = a · w_near(k) + (1 − a) · w_next(k)`, with `a = (T_next − 30 days) / (T_next − T_near)`,
+
+where `w = σ²T` is total implied variance, the quantity the VIX interpolates. The forward and the discount factor are interpolated the same way in logs. The 30-day density, its checks and the probabilities are then computed from that smile.
+
+**What a row holds.** For the 30-day horizon: the market and lognormal probability of a drop of more than 2 standard deviations (below `F·exp(−2σ√T)`, from the forward, as elsewhere in this project) and of more than 10% (below 90% of the spot level at the snapshot), ATM vol, skew, excess kurtosis, probability mass, mean vs forward, negative mass. For each of the two expiries: the SVI parameters, forward, discount factor and time to expiry (enough to rebuild the 30-day density and any other threshold later, with `daily.rebuild_30d(row)`), the implied rate, SVI fit error, probability mass, mean vs forward, and the number of strikes used for the SVI fit and for put-call parity. Plus the time of the newest trade in the chain, the spot level and its time, a quality flag and the git commit of the code. No Yahoo quotes are stored.
+
+**Read the probabilities as "on day 30".** They are probabilities for the index level 30 calendar days later, not for touching a level at some point along the way; a path that falls 12% and recovers by day 30 does not count. The fair real-world comparison is therefore the 30-calendar-day return from the snapshot, not the worst drawdown inside the month. They are also risk-neutral (see Limits).
+
+**Timing, holidays and gaps.** GitHub Actions cron runs in UTC and often starts late, so the workflow ([`.github/workflows/daily.yml`](.github/workflows/daily.yml)) fires at 15:35, 15:50 and 16:05 New York in both summer (EDT, UTC−4) and winter (EST, UTC−5): six UTC times, three of which fall inside the window in any season. The script itself decides: outside 15:30–16:15 New York it does nothing; if the day already has a row it does nothing; otherwise it needs quotes and an SPX level less than an hour old. There is no holiday calendar: on a holiday the newest quote is from the previous session, and on an early-close day (13:00, options 13:15) it is more than two hours old at 15:35, so both are skipped by the same freshness test. Every in-window run that ends without a row (closed market, Yahoo failing three times, a fit that cannot be computed) is recorded with its reason in `data/skipped_days.csv`, one line per day; a later successful run that day removes the line. Rows that fail a quality check are still written, with `quality_ok = False` and the failed checks named in `quality_flags`: probability mass off by 0.5% or more, mean more than 30 bp from the forward, SVI error of 1 vol point or more, implied rate outside 0–10%, negative mass after interpolation, a 30-day point outside the two expiries (extrapolation; only when no expiry lies within 30 days), or any of these being NaN. Empty bid/ask quotes with fresh trade times count as a Yahoo failure and are retried, not as a closed market. Strike counts are recorded but not yet checked; a threshold will be set after the first weeks of data.
+
+**Run it yourself** (inside 15:30–16:15 New York on a trading day, otherwise it exits with a message): `python -m rnd.daily`. Tests, without network: `python tests/test_daily.py`.
+
 ## How to run
 
 ```
@@ -119,7 +137,7 @@ Live data comes from Yahoo Finance (free, via yfinance). Run it during US market
 
 ## Tests
 
-`python tests/test_rnd.py`: 16 tests, about 65 seconds on a MacBook Air (M-series); most of it is the 27-expiry surface fit. Every test checks a known answer or a no-arbitrage fact: the Heston reference, parity, density recovery from noisy quotes, all 27 real expiries, the live loader on simulated Yahoo data (stale quotes, closed market), the surface's calendar no-arbitrage, and the CLI. GitHub Actions runs them on every push with Python 3.12 and 3.13.
+`python tests/test_rnd.py`: 16 tests, about 65 seconds on a MacBook Air (M-series); most of it is the 27-expiry surface fit. `python tests/test_daily.py`: 17 tests of the daily snapshot on simulated Yahoo data, without network, about 11 seconds. Every test checks a known answer or a no-arbitrage fact: the Heston reference, parity, density recovery from noisy quotes, all 27 real expiries, the live loader on simulated Yahoo data (stale quotes, closed market), the surface's calendar no-arbitrage, and the CLI. GitHub Actions runs them on every push with Python 3.12 and 3.13.
 
 ## Limits
 
@@ -135,7 +153,7 @@ Live data comes from Yahoo Finance (free, via yfinance). Run it during US market
 ## Data sources and licences
 
 - **Cboe SPXW quotes, 2019-06-26 15:45 snapshot** (Cboe DataShop "Option EOD Summary" format), as published in the open-source [volkit](https://github.com/sitmo/volkit) project. volkit's code is BSD 3-Clause; the quotes are Cboe market data and volkit states no Cboe licence for them, so this repository does not include them: [`tests/data/download.py`](tests/data/download.py) fetches the file from volkit at a pinned commit and checks its SHA-256.
-- **Yahoo Finance** option chains via [yfinance](https://github.com/ranaroussi/yfinance), fetched at run time and never stored here. yfinance's own README notes that the Yahoo Finance API is intended for personal use only and points to [Yahoo's terms of use](https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html); only charts and summary numbers derived from it are in this repository.
+- **Yahoo Finance** option chains via [yfinance](https://github.com/ranaroussi/yfinance), fetched at run time and never stored here. yfinance's own README notes that the Yahoo Finance API is intended for personal use only and points to [Yahoo's terms of use](https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html); only charts and summary numbers derived from it are in this repository, including the daily CSV files in `data/`.
 - **U.S. Treasury daily bill rates** (public domain), quoted in the live result table.
 
 ## License
@@ -148,9 +166,10 @@ Code: [MIT](LICENSE), © 2026 Bliyev Aidan. The data sources above keep their ow
 - Gatheral, J. (2004). A parsimonious arbitrage-free implied volatility parameterization with application to the valuation of volatility derivatives. Global Derivatives & Risk Management, Madrid.
 - Gatheral, J. and Jacquier, A. (2014). Arbitrage-free SVI volatility surfaces. *Quantitative Finance*, 14(1), 59–71.
 - Lee, R. W. (2004). The moment formula for implied volatility at extreme strikes. *Mathematical Finance*, 14(3), 469–480.
+- Cboe. [*Volatility Index Methodology: Cboe Volatility Index*](https://cdn.cboe.com/resources/indices/governance/Volatility_Index_Methodology_Cboe_Volatility_Index.pdf) (30 Day Bracket, constant 30-day maturity).
 - Heston, S. L. (1993). A closed-form solution for options with stochastic volatility with applications to bond and currency options. *Review of Financial Studies*, 6(2), 327–343.
 
 ## Next steps
 
-1. **Fear index:** store the 2-σ crash probability daily and compare it with VIX.
+1. **Fear index:** daily collection has started (see Daily data); next, compare the series with VIX, SKEW and realized 30-day returns.
 2. **Implied vs realized:** compare the density's vol with realized vol.
