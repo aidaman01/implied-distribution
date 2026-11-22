@@ -5,6 +5,7 @@
 set -euo pipefail
 python tests/data/download.py
 python tests/test_rnd.py
+python tests/test_daily.py
 python -m rnd --demo --out demo.png
 python -m rnd --csv tests/data/spxw_20190626.csv --expiry 2019-07-26 --out spx_2019.png
 python -m rnd --csv tests/data/spxw_20190626.csv --surface --out surface.png

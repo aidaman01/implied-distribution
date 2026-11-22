@@ -18,3 +18,4 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python tests/test_rnd.py
+      - run: python tests/test_daily.py
