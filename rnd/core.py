@@ -126,9 +126,14 @@ def density(F, T, params, n=4001, width=WIDTH):
     """Breeden-Litzenberger on the smooth SVI call curve. Returns strikes K and density q(K).
     The grid spans +-width ATM std devs: SPX's left tail is fat, and +-8 left 0.56% of the mass
     of a live 6-month expiry below the grid (strikes were quoted far below its edge)."""
-    sd = np.sqrt(svi(0.0, *params))  # ATM total std dev
+    return density_w(F, T, lambda k: svi(k, *params), n, width)
+
+
+def density_w(F, T, w, n=4001, width=WIDTH):
+    """Breeden-Litzenberger on any smooth total-variance smile w(k), k = ln(K/F)."""
+    sd = np.sqrt(w(0.0))  # ATM total std dev
     K = np.linspace(F * np.exp(-width * sd), F * np.exp(width * sd), n)
-    C = black(F, K, T, np.sqrt(svi(np.log(K / F), *params) / T))
+    C = black(F, K, T, np.sqrt(w(np.log(K / F)) / T))
     h = K[1] - K[0]
     q = (C[:-2] - 2 * C[1:-1] + C[2:]) / h ** 2
     return K[1:-1], q
@@ -144,6 +149,12 @@ def naive_density(K, C, DF):
 def lognormal_pdf(K, F, vol, T):
     s = vol * np.sqrt(T)
     return np.exp(-(np.log(K / F) + s ** 2 / 2) ** 2 / (2 * s ** 2)) / (K * s * np.sqrt(2 * np.pi))
+
+
+def lognormal_cdf(K, F, vol, T):
+    """P(S_T < K) when ln S_T is normal with mean ln F - vol^2 T / 2 (Black-Scholes, forward F)."""
+    s = vol * np.sqrt(T)
+    return ndtr((np.log(K / F) + s ** 2 / 2) / s)
 
 
 def moments(K, q, F):

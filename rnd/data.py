@@ -9,13 +9,19 @@ def _mid(df):
     return np.where(good, (df["bid"] + df["ask"]) / 2, np.nan), good
 
 
-def load_chain(ticker="^SPX", expiry=None, min_days=30):
+class MarketClosed(RuntimeError):
+    """Yahoo is showing a closed session's quotes: nothing live to analyse."""
+
+
+def load_chain(ticker="^SPX", expiry=None, min_days=30, now=None):
     """Live chain from Yahoo. Returns (chain, T, expiry, quote time). ^SPX is European: the right
-    instrument for Breeden-Litzenberger. SPY works but is American (small early-exercise bias)."""
+    instrument for Breeden-Litzenberger. SPY works but is American (small early-exercise bias).
+    now: the clock to judge freshness by (default: the real one; tests pass a fixed time)."""
     import yfinance as yf
 
     tk = yf.Ticker(ticker)
-    now = pd.Timestamp.now(tz="America/New_York")
+    now = pd.Timestamp.now(tz="America/New_York") if now is None else pd.Timestamp(now)
+    now = now.tz_convert("America/New_York")
     if expiry is None:
         later = [e for e in tk.options if (pd.Timestamp(e, tz="America/New_York") - now).days >= min_days]
         if not later:
@@ -25,12 +31,22 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30):
         raise RuntimeError(f"{expiry} is not a listed {ticker} expiry. Listed: {', '.join(tk.options)}")
     ch = tk.option_chain(expiry)
 
+    # After the close (weekends too) Yahoo keeps the last session's quotes: on Saturday 2026-10-17,
+    # 97-99% were still two-sided, last traded Friday 16:14, and parity gave a discount factor of 1.018.
+    # Time quotes by the newest trade (Yahoo delays ~15 min) and refuse a closed session's leftovers.
+    # This is checked first: a stale session is a closed market, empty quotes on a live one are not.
+    asof = min(now, max(pd.to_datetime(d["lastTradeDate"], utc=True).max() for d in (ch.calls, ch.puts)))
+    asof = asof.tz_convert("America/New_York")
+    if now - asof > pd.Timedelta(hours=1):
+        raise MarketClosed(f"Newest {ticker} quote is from {asof:%a %Y-%m-%d %H:%M} New York: the market is "
+                           "closed. Run during US hours, 9:30-16:00 New York time, for live quotes.")
+
     c, p = ch.calls.copy(), ch.puts.copy()
     c["call_mid"], c_ok = _mid(c)
     p["put_mid"], p_ok = _mid(p)
     if c_ok.mean() < 0.5 or p_ok.mean() < 0.5:
-        raise RuntimeError("Most bid/ask quotes are empty (US market closed?). Run during "
-                           "US hours, 9:30-16:00 New York time, for real two-sided quotes.")
+        raise RuntimeError(f"Most {ticker} bid/ask quotes are empty although the newest trade is from "
+                           f"{asof:%H:%M} New York; Yahoo may be returning a partial chain.")
     # Yahoo keeps showing the last bid/ask of contracts that stopped trading. On live SPX, quotes
     # last traded over a month ago were up to 1549 points off parity and pushed the implied rate to 38%.
     for d, col in ((c, "call_mid"), (p, "put_mid")):
@@ -40,14 +56,6 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30):
     p = p.groupby("strike", as_index=False)["put_mid"].mean()
     chain = c.merge(p, on="strike", how="outer")
 
-    # After the close (weekends too) Yahoo keeps the last session's quotes: on Saturday 2026-10-17,
-    # 97-99% were still two-sided, last traded Friday 16:14, and parity gave a discount factor of 1.018.
-    # Time quotes by the newest trade (Yahoo delays ~15 min) and refuse a closed session's leftovers.
-    asof = min(now, max(pd.to_datetime(d["lastTradeDate"], utc=True).max() for d in (ch.calls, ch.puts)))
-    asof = asof.tz_convert("America/New_York")
-    if now - asof > pd.Timedelta(hours=1):
-        raise RuntimeError(f"Newest {ticker} quote is from {asof:%a %Y-%m-%d %H:%M} New York: the market is "
-                           "closed. Run during US hours, 9:30-16:00 New York time, for live quotes.")
     close = pd.Timestamp(expiry + " 16:00", tz="America/New_York")
     T = (close - asof).total_seconds() / (365.25 * 86400)
     return chain, T, expiry, asof
