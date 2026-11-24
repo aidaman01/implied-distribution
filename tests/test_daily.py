@@ -282,6 +282,44 @@ def test_no_spxw_on_either_side_is_a_failed_run():
         assert rows(os.path.join(d, daily.DATA_FILE)) == []
 
 
+def commit_step_script() -> str:
+    """The shell script of the workflow's "Commit the data" step, exactly as GitHub runs it."""
+    with open(os.path.join(ROOT, ".github", "workflows", "daily.yml")) as f:
+        block = f.read().split("- name: Commit the data", 1)[1].split("run: |\n", 1)[1]
+    lines = []
+    for line in block.splitlines():
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        lines.append(line[10:])
+    return "\n".join(lines)
+
+
+def test_workflow_commit_step_without_and_with_data():
+    """On 2026-11-23 every run was outside the window, data/ did not exist yet, and `git add data/`
+    failed the step (6 red runs). Without data/ the step must succeed and commit nothing; with a new
+    row it must commit as github-actions[bot] and push. Runs the real step against a local remote."""
+    import subprocess
+    git = lambda *a, cwd: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout
+    with tempfile.TemporaryDirectory() as tmp:
+        remote, work = os.path.join(tmp, "remote.git"), os.path.join(tmp, "work")
+        git("init", "-q", "--bare", "-b", "main", remote, cwd=tmp)
+        git("clone", "-q", remote, work, cwd=tmp)
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init", cwd=work)
+        git("push", "-q", "origin", "HEAD:main", cwd=work)
+        step = lambda message: subprocess.run(["bash", "-e", "-c", commit_step_script()], cwd=work,
+                                              env={**os.environ, "MESSAGE": message}, capture_output=True, text=True)
+        none = step("")
+        assert none.returncode == 0, none.stderr
+        assert git("log", "--format=%s", "origin/main", cwd=work).split() == ["init"]
+        os.makedirs(os.path.join(work, "data"))
+        with open(os.path.join(work, "data", daily.DATA_FILE), "w") as f:
+            f.write("date\n2026-11-24\n")
+        done = step("data: 2026-11-24 crash prob")
+        assert done.returncode == 0, done.stderr
+        assert git("log", "-1", "--format=%an|%s", "main", cwd=remote).strip() == \
+            "github-actions[bot]|data: 2026-11-24 crash prob"
+
+
 def test_repeated_skips_with_the_same_reason_change_nothing():
     """Three crons on a holiday give one skip line and no file change after the first (no commit churn)."""
     yahoo, _ = fake_yahoo(WINTER_RUN, quotes_age=timedelta(hours=20))

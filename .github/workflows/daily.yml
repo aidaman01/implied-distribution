@@ -41,6 +41,10 @@ jobs:
         env:
           MESSAGE: ${{ steps.collect.outputs.message }}
         run: |
+          if [ ! -d data ]; then
+            echo "No data directory yet (no in-window run so far): nothing to commit."
+            exit 0
+          fi
           git add data/
           if git diff --cached --quiet; then
             echo "No data change to commit."
