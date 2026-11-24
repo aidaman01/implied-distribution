@@ -137,7 +137,7 @@ Live data comes from Yahoo Finance (free, via yfinance). Run it during US market
 
 ## Tests
 
-`python tests/test_rnd.py`: 17 tests, about 65 seconds on a MacBook Air (M-series); most of it is the 27-expiry surface fit. `python tests/test_daily.py`: 19 tests of the daily snapshot on simulated Yahoo data, without network, about 11 seconds. Every test checks a known answer or a no-arbitrage fact: the Heston reference, parity, density recovery from noisy quotes, all 27 real expiries, the live loader on simulated Yahoo data (stale quotes, closed market), the surface's calendar no-arbitrage, and the CLI. GitHub Actions runs them on every push with Python 3.12 and 3.13.
+`python tests/test_rnd.py`: 17 tests, about 65 seconds on a MacBook Air (M-series); most of it is the 27-expiry surface fit. `python tests/test_daily.py`: 20 tests of the daily snapshot on simulated Yahoo data, without network, about 11 seconds. Every test checks a known answer or a no-arbitrage fact: the Heston reference, parity, density recovery from noisy quotes, all 27 real expiries, the live loader on simulated Yahoo data (stale quotes, closed market), the surface's calendar no-arbitrage, and the CLI. GitHub Actions runs them on every push with Python 3.12 and 3.13.
 
 ## Limits
 
