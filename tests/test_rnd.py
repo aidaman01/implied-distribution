@@ -253,6 +253,27 @@ def test_live_loader_uses_only_pm_settled_spxw():
         raise AssertionError("SPX monthlies were used when no SPXW was listed")
 
 
+def test_live_expiry_on_an_early_close_runs_to_13_00():
+    """On NYSE early-close days (2026-11-27, 2026-12-24, ...) the market and the S&P 500 close at 13:00
+    New York, so SPXW expiring then settle on the 13:00 close: time to expiry runs to 13:00, not 16:00."""
+    now = pd.Timestamp("2026-12-10 15:40", tz="America/New_York")
+    asof = now - pd.Timedelta(minutes=15)
+    real = sys.modules.get("yfinance")
+    for expiry, close in (("2026-12-24", "13:00"), ("2026-12-23", "16:00")):
+        T0 = (pd.Timestamp(f"{expiry} {close}", tz="America/New_York") - asof).total_seconds() / (365.25 * 86400)
+        chain, _, _ = synthetic_chain(T=T0)
+        side = lambda mid: pd.DataFrame({"contractSymbol": "SPXW261224C00100000", "strike": chain["strike"],
+                                         "bid": mid - 0.005, "ask": mid + 0.005, "lastTradeDate": [asof] * len(chain)})
+        calls, puts = side(chain["call_mid"]), side(chain["put_mid"])
+        yahoo = types.SimpleNamespace(options=(expiry,), option_chain=lambda e: types.SimpleNamespace(calls=calls, puts=puts))
+        sys.modules["yfinance"] = types.SimpleNamespace(Ticker=lambda ticker: yahoo)
+        try:
+            _, T, _, _ = load_chain("^SPX", expiry, now=now)
+        finally:
+            sys.modules["yfinance"] = real
+        assert abs(T - T0) < 1e-12, (expiry, T * 365.25, T0 * 365.25)
+
+
 def test_surface_cli():
     """python -m rnd --csv FILE --surface: writes its own default file (never the committed surface.png),
     reports the calendar check, and stops cleanly when fewer than two expiries can be fitted."""

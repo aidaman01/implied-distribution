@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 import time as clock
-from datetime import date, datetime, time, timezone
+from datetime import datetime, time, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
 
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from .core import analyze, density_w, lognormal_cdf, moments, svi
-from .data import ROOTS, MarketClosed, NoContracts, load_chain
+from .data import ROOTS, MarketClosed, NoContracts, expiry_close, load_chain
 
 log = logging.getLogger("rnd.daily")
 
@@ -62,9 +62,8 @@ def in_window(t: datetime) -> bool:
 
 
 def years_to(expiry: str, t: datetime) -> float:
-    """Year fraction from t to the 16:00 New York close on the expiry date."""
-    close = datetime.combine(date.fromisoformat(expiry), time(16), NY)
-    return (close - t).total_seconds() / YEAR_SECONDS
+    """Year fraction from t to the expiry's settlement: the New York close, 16:00 or 13:00 on an early close."""
+    return (expiry_close(expiry) - pd.Timestamp(t)).total_seconds() / YEAR_SECONDS
 
 
 def bracket(expiries: list[str], now: datetime) -> tuple[str, str]:

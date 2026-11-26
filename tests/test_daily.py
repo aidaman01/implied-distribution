@@ -320,6 +320,16 @@ def test_workflow_commit_step_without_and_with_data():
             "github-actions[bot]|data: 2026-11-24 crash prob"
 
 
+def test_early_close_expiry_counts_to_13_00_in_the_bracket():
+    """On 2026-11-24 at 15:35 New York Yahoo listed 2026-12-23, 2026-12-24 and 2026-12-28. 2026-12-24 is
+    an NYSE early close (13:00), which puts it 29.89 days out, within 30 days, so the bracket is
+    (12-24, 12-28). Measured to 16:00 it was 30.02 days, and that day's row used (12-23, 12-24)."""
+    t = datetime(2026, 11, 24, 15, 35, tzinfo=NY)
+    assert abs(daily.years_to("2026-12-24", t) * 365.25 - (29 + 21 / 24 + 25 / 1440)) < 1e-9
+    assert abs(daily.years_to("2026-12-23", t) * 365.25 - (29 + 25 / 1440)) < 1e-9
+    assert daily.bracket(["2026-12-23", "2026-12-24", "2026-12-28"], t) == ("2026-12-24", "2026-12-28")
+
+
 def test_repeated_skips_with_the_same_reason_change_nothing():
     """Three crons on a holiday give one skip line and no file change after the first (no commit churn)."""
     yahoo, _ = fake_yahoo(WINTER_RUN, quotes_age=timedelta(hours=20))

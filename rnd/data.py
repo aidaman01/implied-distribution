@@ -21,6 +21,16 @@ class NoContracts(LookupError):
 # to PM-settled SPXW (settled at the 16:00 close). Time to expiry is measured to 16:00, so only SPXW fits.
 ROOTS = {"^SPX": "SPXW"}
 
+# NYSE early closes: the market, and so the S&P 500 close, at 13:00 New York (options trade to 13:15).
+# SPXW expiring that day settle on the 13:00 close. Source: NYSE Group calendar of 2025-12-23
+# (covers 2026-2028; extend it when NYSE publishes later years).
+EARLY_CLOSES = frozenset({"2026-11-27", "2026-12-24", "2027-11-26", "2028-07-03", "2028-11-24"})
+
+
+def expiry_close(expiry):
+    """When PM-settled options expiring on this date settle: 16:00 New York, 13:00 on an early close."""
+    return pd.Timestamp(f"{expiry} {'13:00' if expiry in EARLY_CLOSES else '16:00'}", tz="America/New_York")
+
 
 def load_chain(ticker="^SPX", expiry=None, min_days=30, now=None):
     """Live chain from Yahoo. Returns (chain, T, expiry, quote time). ^SPX is European: the right
@@ -71,8 +81,7 @@ def load_chain(ticker="^SPX", expiry=None, min_days=30, now=None):
     p = p.groupby("strike", as_index=False)["put_mid"].mean()
     chain = c.merge(p, on="strike", how="outer")
 
-    close = pd.Timestamp(expiry + " 16:00", tz="America/New_York")
-    T = (close - asof).total_seconds() / (365.25 * 86400)
+    T = (expiry_close(expiry) - asof).total_seconds() / (365.25 * 86400)
     return chain, T, expiry, asof
 
 
